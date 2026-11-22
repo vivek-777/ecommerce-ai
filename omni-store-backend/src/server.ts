@@ -12,9 +12,22 @@ import agentRouter from './routes/agent';
 const app = express();
 const port = Number(process.env.PORT) || 4000;
 
+const allowedOrigins = (
+  process.env.FRONTEND_ORIGIN || 'http://localhost:3000'
+)
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_ORIGIN || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
   })
 );
 app.use(express.json());

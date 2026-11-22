@@ -17,6 +17,7 @@ import StorefrontIcon from '@mui/icons-material/Storefront';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import Link from '@/components/common/Link';
 import ProductCard from '@/components/products/ProductCard';
+import ShoppingAgentDrawer from '@/components/agents/ShoppingAgentDrawer';
 import { MOCK_PRODUCTS } from '@/data/mockProducts';
 import { useStore } from '@/context/StoreContext';
 import { fetchProducts, Product as ApiProduct } from '@/lib/api';
@@ -123,6 +124,7 @@ export default function HomeClient() {
   const [featuredProducts, setFeaturedProducts] = useState<Product[]>(() =>
     MOCK_PRODUCTS.slice(0, 3)
   );
+  const [agentOpen, setAgentOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -206,6 +208,20 @@ export default function HomeClient() {
                 sx={{ fontWeight: 700, textAlign: 'center' }}
               >
                 Browse Products
+              </Button>
+              <Button
+                variant="contained"
+                color="inherit"
+                size="large"
+                startIcon={<SmartToyIcon />}
+                onClick={() => setAgentOpen(true)}
+                sx={{
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  color: 'primary.main',
+                }}
+              >
+                Ask AI Agent
               </Button>
               <Button
                 component={Link}
@@ -349,9 +365,24 @@ export default function HomeClient() {
                 </Typography>
               </Box>
             </Stack>
+
+            <Button
+              variant="contained"
+              color="secondary"
+              startIcon={<SmartToyIcon />}
+              onClick={() => setAgentOpen(true)}
+              sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}
+            >
+              Open AI Assistant
+            </Button>
           </Stack>
         </Paper>
       </Container>
+
+      <ShoppingAgentDrawer
+        open={agentOpen}
+        onClose={() => setAgentOpen(false)}
+      />
     </Box>
   );
 }

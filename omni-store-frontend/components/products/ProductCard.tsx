@@ -131,7 +131,7 @@ export default function ProductCard({ product }: ProductCardProps) {
           fullWidth
           sx={{ fontWeight: 600, textAlign: 'center' }}
         >
-          View Details & 4-Store Stock
+          View Details
         </Button>
       </CardActions>
     </Card>

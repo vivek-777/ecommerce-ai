@@ -79,9 +79,32 @@ export interface OrderRecord {
   createdAt?: string;
 }
 
+export interface AgentHistoryItem {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AgentRecommendationItem extends Partial<Product> {
+  id: string;
+  name: string;
+  category?: string;
+  price: number;
+  storeId?: StoreCity;
+  quantity?: number;
+  status?: StockStatus;
+  otherAvailableStores?: StoreCity[];
+}
+
+export interface AgentChatPayload {
+  message: string;
+  storeId?: StoreCity;
+  history?: AgentHistoryItem[];
+}
+
 export interface AgentChatResponse {
   reply: string;
-  recommendations?: Product[];
+  storeId?: StoreCity;
+  recommendations?: AgentRecommendationItem[];
 }
 
 const API_BASE_URL = (
@@ -245,10 +268,9 @@ export function updateOrderStage(
 }
 
 // Shopping Agent
-export function sendAgentMessage(payload: {
-  message: string;
-  storeId?: StoreCity;
-}): Promise<AgentChatResponse> {
+export function sendAgentMessage(
+  payload: AgentChatPayload
+): Promise<AgentChatResponse> {
   return apiRequest('/api/agent/chat', {
     method: 'POST',
     body: JSON.stringify(payload),

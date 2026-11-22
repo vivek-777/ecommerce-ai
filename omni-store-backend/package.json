@@ -8,6 +8,8 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.124",
+    "ai": "^7.0.179",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

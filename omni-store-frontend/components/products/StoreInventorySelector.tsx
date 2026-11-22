@@ -63,7 +63,7 @@ export default function StoreInventorySelector({
           variant="subtitle1"
           sx={{ fontWeight: 700, textAlign: 'left' }}
         >
-          Select Store & Check Live Stock (4 Cities)
+          Select Store & Check Live Stock
         </Typography>
       </Stack>
 
