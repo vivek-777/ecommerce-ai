@@ -8,6 +8,9 @@ import { asyncHandler } from '../utils/asyncHandler';
 
 const VALID_STORES: StoreCity[] = ['hyderabad', 'bengaluru', 'mumbai', 'delhi'];
 
+const GREETING_REGEX =
+  /^(hi|hello|hey|hii+|hola|namaste|good\s*(morning|afternoon|evening)|how\s*are\s*you|what'?s\s*up|sup)[!.?\s]*$/i;
+
 const agentChatSchema = z.object({
   message: z.string().trim().min(1, 'Message is required'),
   storeId: z
@@ -34,39 +37,105 @@ type RecommendationItem = {
   otherAvailableStores: StoreCity[];
 };
 
+const STOP_WORDS = new Set([
+  'show',
+  'me',
+  'the',
+  'in',
+  'stock',
+  'instock',
+  'available',
+  'products',
+  'product',
+  'items',
+  'item',
+  'for',
+  'at',
+  'from',
+  'under',
+  'below',
+  'less',
+  'than',
+  'what',
+  'which',
+  'are',
+  'is',
+  'have',
+  'do',
+  'you',
+  'can',
+  'get',
+  'find',
+  'list',
+  'all',
+  'only',
+  'please',
+  ...VALID_STORES,
+]);
+
+function extractSearchKeywords(rawQuery: string): string[] {
+  return rawQuery
+    .toLowerCase()
+    .split(/\W+/)
+    .filter((word) => word.length > 2 && !STOP_WORDS.has(word) && !/^\d+$/.test(word));
+}
+
+function detectsInStockIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    /\b(in[\s-]?stock|available|availability)\b/.test(lower) &&
+    !/\bout[\s-]?of[\s-]?stock\b/.test(lower)
+  );
+}
+
 async function runDeterministicInventorySearch(
   query: string,
   targetStore: StoreCity,
-  maxPrice?: number
+  options?: {
+    maxPrice?: number;
+    inStockOnly?: boolean;
+  }
 ): Promise<RecommendationItem[]> {
   const products = await Product.find({}).lean();
-  const q = query.trim().toLowerCase();
+  const keywords = extractSearchKeywords(query);
+  const maxPrice = options?.maxPrice;
+  const inStockOnly = Boolean(options?.inStockOnly);
 
   let filtered = products.filter((p) => {
+    const activeStock = p.storeInventory?.[targetStore] ?? {
+      quantity: 0,
+      status: 'out_of_stock' as const,
+    };
+
+    if (inStockOnly && activeStock.quantity <= 0) {
+      return false;
+    }
+
     if (typeof maxPrice === 'number' && p.price > maxPrice) {
       return false;
     }
-    if (!q) return true;
 
-    const nameMatch = p.name.toLowerCase().includes(q);
-    const categoryMatch = p.category.toLowerCase().includes(q);
-    const wordMatch = q
-      .split(/\W+/)
-      .filter((w) => w.length > 2)
-      .some(
-        (w) =>
-          p.name.toLowerCase().includes(w) ||
-          p.category.toLowerCase().includes(w)
-      );
+    if (keywords.length === 0) {
+      return true;
+    }
 
-    return nameMatch || categoryMatch || wordMatch;
+    const nameLower = p.name.toLowerCase();
+    const categoryLower = p.category.toLowerCase();
+    const descLower = (p.description || '').toLowerCase();
+
+    return keywords.some(
+      (kw) =>
+        nameLower.includes(kw) ||
+        categoryLower.includes(kw) ||
+        descLower.includes(kw)
+    );
   });
 
-  if (filtered.length === 0 && !maxPrice) {
+  if (filtered.length === 0 && keywords.length > 0 && !maxPrice && !inStockOnly) {
     filtered = products;
   }
 
-  return filtered.slice(0, 4).map((product) => {
+  return filtered.slice(0, 6).map((product) => {
     const activeStock = product.storeInventory?.[targetStore] ?? {
       quantity: 0,
       status: 'out_of_stock' as const,
@@ -108,6 +177,17 @@ export const chatWithAgent = asyncHandler(
     const mentionedStore = VALID_STORES.find((city) => lower.includes(city));
     const defaultTargetStore: StoreCity = mentionedStore || storeId;
 
+    // Handle pure greetings immediately without fetching or showing product cards
+    if (GREETING_REGEX.test(message.trim())) {
+      res.json({
+        reply: `Hi! I'm your OmniStore shopping assistant (currently viewing ${defaultTargetStore.toUpperCase()}). Ask me about available products, prices in ₹, or stock across Hyderabad, Bengaluru, Mumbai, and Delhi!`,
+        storeId: defaultTargetStore,
+        recommendations: [],
+      });
+      return;
+    }
+
+    const inferredInStockOnly = detectsInStockIntent(message);
     let resolvedStore: StoreCity = defaultTargetStore;
     let latestRecommendations: RecommendationItem[] = [];
 
@@ -116,10 +196,12 @@ export const chatWithAgent = asyncHandler(
         model: google('gemini-3.5-flash-lite'),
         stopWhen: stepCountIs(3),
         system: `You are the Omni Store shopping assistant across Hyderabad, Bengaluru, Mumbai, and Delhi stores.
-- Always call the checkStoreInventory tool before answering questions about products, prices, or stock.
+- For greetings, thanks, or general chitchat, reply warmly in 1-2 sentences WITHOUT calling any tools.
+- Only call checkStoreInventory when the user asks about products, prices, stock, availability, or recommendations.
+- When the user asks for "in-stock" or "available" items, set inStockOnly: true so out-of-stock items are excluded.
 - Never invent product names, prices, or stock counts.
 - Default store if the user does not name a city: ${defaultTargetStore}.
-- Keep replies concise, clear, and helpful, mentioning prices in ₹ (INR) and alternative cities if an item is out of stock in the selected store.`,
+- Keep replies concise, clear, and helpful, mentioning prices in ₹ (INR) and alternative cities if a specific item is out of stock in the selected store.`,
         messages: [
           ...history.slice(-8),
           { role: 'user', content: message },
@@ -127,37 +209,47 @@ export const chatWithAgent = asyncHandler(
         tools: {
           checkStoreInventory: tool({
             description:
-              'Search Omni Store catalog by keyword, category, max price in INR, and target store city',
+              'Search Omni Store catalog by keyword, category, max price in INR, stock availability, and target store city',
             inputSchema: z.object({
               query: z
                 .string()
                 .optional()
                 .describe(
-                  'Product name or category keyword, e.g. "laptop", "headphones"'
+                  'Product name or category keyword, e.g. "laptop", "headphones". Leave empty when listing all products in a store.'
                 ),
               maxPrice: z
                 .number()
                 .optional()
                 .describe('Maximum budget in INR'),
+              inStockOnly: z
+                .boolean()
+                .optional()
+                .describe(
+                  'Set to true when the user asks only for in-stock or available items'
+                ),
               city: z
                 .enum(['hyderabad', 'bengaluru', 'mumbai', 'delhi'])
                 .optional()
                 .describe('Target store city'),
             }),
-            execute: async ({ query, maxPrice, city }) => {
+            execute: async ({ query, maxPrice, inStockOnly, city }) => {
               const targetStore: StoreCity = city || defaultTargetStore;
               resolvedStore = targetStore;
 
               const recommendations = await runDeterministicInventorySearch(
                 query ?? '',
                 targetStore,
-                maxPrice
+                {
+                  maxPrice,
+                  inStockOnly: inStockOnly ?? inferredInStockOnly,
+                }
               );
 
               latestRecommendations = recommendations;
 
               return {
                 storeId: targetStore,
+                inStockOnly: inStockOnly ?? inferredInStockOnly,
                 recommendations,
               };
             },
@@ -173,20 +265,29 @@ export const chatWithAgent = asyncHandler(
     } catch (aiError) {
       console.warn('Gemini fallback triggered:', aiError);
 
+      const priceMatch = lower.match(/(?:under|below|less\s*than)\s*₹?\s*(\d[\d,]*)/);
+      const parsedMaxPrice = priceMatch
+        ? Number(priceMatch[1].replace(/,/g, ''))
+        : undefined;
+
       const fallbackRecommendations = await runDeterministicInventorySearch(
         message,
-        defaultTargetStore
+        defaultTargetStore,
+        {
+          maxPrice: parsedMaxPrice,
+          inStockOnly: inferredInStockOnly,
+        }
       );
 
       const fallbackReply =
         fallbackRecommendations.length > 0
-          ? `Here is the live stock check for ${defaultTargetStore.toUpperCase()} across ${fallbackRecommendations.length} item(s): ${fallbackRecommendations
+          ? `Here ${inferredInStockOnly ? 'are the in-stock items' : 'is the stock check'} for ${defaultTargetStore.toUpperCase()} (${fallbackRecommendations.length} item${fallbackRecommendations.length === 1 ? '' : 's'}): ${fallbackRecommendations
               .map(
                 (r) =>
                   `${r.name} (₹${r.price.toLocaleString('en-IN')}) — ${r.quantity} units (${r.status})`
               )
               .join('; ')}.`
-          : `No matching products found in the catalog for "${message}" at ${defaultTargetStore}.`;
+          : `No ${inferredInStockOnly ? 'in-stock ' : ''}products matched your request in ${defaultTargetStore.toUpperCase()}.`;
 
       res.json({
         reply: fallbackReply,
